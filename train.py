@@ -17,7 +17,7 @@ from utils import validate, set_seed
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--id", type=str, default="default")
-parser.add_argument("--logdir", type=str, default="logs")
+parser.add_argument("--logdir", type=str, default="logs/")
 parser.add_argument("--epochs", type=int, default=300)
 parser.add_argument("--input_size", type=int, default=256)
 parser.add_argument("--seed", type=int, default=0)
@@ -47,7 +47,7 @@ if args.dataset == "JRDR":
 else:
     raise NotImplementedError(args.dataset)
 
-train_loader, valid_loader = get_train_valid_loader(train_data, valid_data, show_sample=True)
+train_loader, valid_loader = get_train_valid_loader(train_data, valid_data, show_sample=False)
 test_loader = get_test_loader(test_data)
 
 model = DerainCNNModular(
@@ -63,30 +63,28 @@ model = DerainCNNModular(
 
 exp_id = os.path.join(args.dataset, args.id)
 logdir = args.logdir
-checkpoint_dir = "./checkpoints"
 
-exp_log_dir = os.path.join(logdir, exp_id)
-exp_checkpoint_dir = os.path.join(checkpoint_dir, exp_id, str(args.seed))
-
+exp_log_dir = os.path.join(logdir, exp_id, str(args.seed))
+os.makedirs(exp_log_dir, exist_ok=True)
 print(f"Logging to {exp_log_dir}")
-print(f"Checkpoint saved to {exp_checkpoint_dir}")
+print(f"Checkpoint saved to {exp_log_dir}")
 
-config_path = os.path.join(logdir, "configs.yaml")
+config_path = os.path.join(exp_log_dir, "configs.yaml")
 command_args = dict(defaults=vars(args))
 with open(config_path, "w") as f:
     yaml.dump(command_args, f, default_flow_style=False)
 
-script_path = os.path.join(logdir, "script.sh")
+script_path = os.path.join(exp_log_dir, "script.sh")
 with open(script_path, "w") as f:
     f.write("#!/bin/bash")
     f.write("\n")
     f.write("python ")
     f.write(" ".join(sys.argv))
 
-checkpoint_file = os.path.join(exp_checkpoint_dir, "latest_epoch.pth")
-best_model_dir = os.path.join(exp_checkpoint_dir, "models")
+checkpoint_file = os.path.join(exp_log_dir, "latest_epoch.pth")
+best_model_dir = os.path.join(exp_log_dir, "models")
 best_model_file = "{Validation_PSNR:.2f}"
-report_file = os.path.join(exp_checkpoint_dir, "report.txt")
+report_file = os.path.join(exp_log_dir, "report.txt")
 
 
 class SaveModelCallback(pl.Callback):
@@ -124,7 +122,7 @@ trainer = Trainer(
 
 trainer.fit(model, train_loader, valid_loader)
 
-final_checkpoint_file = os.path.join(exp_checkpoint_dir, "final_epoch.pth")
+final_checkpoint_file = os.path.join(exp_log_dir, "final_epoch.pth")
 torch.save(model.state_dict(), final_checkpoint_file)
 
 model.eval()
