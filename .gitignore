@@ -1,1 +1,8 @@
 dev
+.vscode
+data/**
+__pycache__
+checkpoints/
+logs/
+out/
+scripts/**/

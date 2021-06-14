@@ -2,6 +2,9 @@
 
 > Shivakanth Sujit & Deivalakshmi S, "Factorized Multiscale Multiresolution Residual Network."
 
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## Overview
 
 This repository provides a PyTorch implementation of FMMRNet.
@@ -36,4 +39,4 @@ python eval.py
 
 Use Tensorboard to monitor the training.
 
-`tensorboard --logdir lightning_logs`
+`tensorboard --logdir logs`

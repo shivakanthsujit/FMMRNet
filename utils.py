@@ -1,5 +1,6 @@
 import os
 from statistics import mean
+import random
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -130,7 +131,7 @@ def print_stats(name, model_loss, data_loss):
     print("Worst- Model: %.4f Dataset: %.4f " % (min(model_loss.values), min(data_loss.values)))
 
 
-def validate(model, loader):
+def validate(model, loader, name=None, save_metric_dir=None):
     with torch.no_grad():
 
         model.eval()
@@ -164,3 +165,16 @@ def validate(model, loader):
         df.columns = ["Model PSNR", "Model SSIM", "Dataset PSNR", "Dataset SSIM"]
         compare_metrics(df)
         print(df.describe())
+        if save_metric_dir and name:
+            save_path = os.path.join(save_metric_dir, f"{name}.csv")
+            df.to_csv(save_path)
+
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
+    np.random.seed(seed)  # Numpy module.
+    random.seed(seed)  # Python random module.
+    torch.manual_seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)

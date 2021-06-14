@@ -4,6 +4,6 @@ pytorch-msssim
 pytorch_lightning
 albumentations
 numpy
-PIL
+Pillow
 matplotlib
 tqdm

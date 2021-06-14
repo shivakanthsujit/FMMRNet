@@ -11,10 +11,10 @@ from torch.utils.data.dataloader import DataLoader
 from utils import show_images
 
 
-def get_train_transforms():
+def get_train_transforms(input_size=256):
     return A.Compose(
         [
-            A.RandomCrop(256, 256),
+            A.RandomCrop(input_size, input_size),
             A.HorizontalFlip(),
             A.VerticalFlip(),
             A.OneOf(
@@ -36,9 +36,9 @@ def get_train_transforms():
     )
 
 
-def get_valid_transforms():
+def get_valid_transforms(input_size=256):
     return A.Compose(
-        [A.CenterCrop(256, 256), A.ToFloat(255), ToTensorV2()],
+        [A.CenterCrop(input_size, input_size), A.ToFloat(255), ToTensorV2()],
         additional_targets={"image1": "image"},
     )
 

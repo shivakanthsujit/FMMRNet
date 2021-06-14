@@ -1,53 +1,98 @@
 import os
 import random
+import argparse
+import sys
 
 import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning import loggers as pl_loggers
+import ruamel.yaml as yaml
 
-from datasets import JRDR
-from models import DerainCNN
-from utils import (
-    get_test_loader,
-    get_train_valid_loader,
-    train_transform,
-    valid_transform,
-    validate,
-)
+from datasets import JRDR, get_test_loader, get_train_valid_loader, get_train_transforms, get_valid_transforms
+from models import DerainCNN, DerainCNNModular
+from utils import validate, set_seed
 
-seed = 42
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
-np.random.seed(seed)  # Numpy module.
-random.seed(seed)  # Python random module.
-torch.manual_seed(seed)
-os.environ["PYTHONHASHSEED"] = str(seed)
+parser = argparse.ArgumentParser()
+parser.add_argument("--id", type=str, default="default")
+parser.add_argument("--logdir", type=str, default="logs")
+parser.add_argument("--epochs", type=int, default=300)
+parser.add_argument("--input_size", type=int, default=256)
+parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--dataset", type=str, default="JRDR")
+parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--channel_mul", type=int, default=16)
+parser.add_argument("--depth", type=int, default=5)
+parser.add_argument("--center_depth", type=int, default=4)
+parser.add_argument("--attention_type", type=str, default="channel")
+parser.add_argument("--reduction", type=int, default=16)
+parser.add_argument("--lr", type=float, default=4e-4)
+parser.add_argument("--gamma", type=float, default=0.8)
+args = parser.parse_args()
 
-dataset_dir = os.path.join("data", "JRDR")
-test_dir = os.path.join("data", "JRDR")
-train_data = JRDR(root=dataset_dir, transform=train_transform)
-valid_data = JRDR(root=dataset_dir, transform=valid_transform)
-test_data = JRDR(root=test_dir, split="test", transform=valid_transform)
+device = "cuda" if (torch.cuda.is_available() and args.device == "cuda") else "cpu"
+
+set_seed(args.seed)
+input_size = args.input_size
+train_transform = get_train_transforms(input_size)
+valid_transform = get_valid_transforms(input_size)
+if args.dataset == "JRDR":
+    dataset_dir = os.path.join("data", "JRDR")
+    test_dir = os.path.join("data", "JRDR")
+    train_data = JRDR(root=dataset_dir, transform=train_transform)
+    valid_data = JRDR(root=dataset_dir, transform=valid_transform)
+    test_data = JRDR(root=test_dir, split="test", transform=valid_transform)
+else:
+    raise NotImplementedError(args.dataset)
 
 train_loader, valid_loader = get_train_valid_loader(train_data, valid_data, show_sample=True)
 test_loader = get_test_loader(test_data)
 
-model = DerainCNN()
+model = DerainCNNModular(
+    input_size=input_size,
+    channel_mul=args.channel_mul,
+    depth=args.depth,
+    center_depth=args.center_depth,
+    attention_type=args.attention_type,
+    reduction=args.reduction,
+    lr=args.lr,
+    gamma=args.gamma,
+)
 
-save_dir = "./checkpoints"
-checkpoint_file = os.path.join(save_dir, "latest_epoch.pth")
-best_model_dir = os.path.join(save_dir, "models")
-best_model_file = "{Validation_PSNR}"
-report_file = os.path.join(save_dir, "report.txt")
+exp_id = os.path.join(args.dataset, args.id)
+logdir = args.logdir
+checkpoint_dir = "./checkpoints"
+
+exp_log_dir = os.path.join(logdir, exp_id)
+exp_checkpoint_dir = os.path.join(checkpoint_dir, exp_id, str(args.seed))
+
+print(f"Logging to {exp_log_dir}")
+print(f"Checkpoint saved to {exp_checkpoint_dir}")
+
+config_path = os.path.join(logdir, "configs.yaml")
+command_args = dict(defaults=vars(args))
+with open(config_path, "w") as f:
+    yaml.dump(command_args, f, default_flow_style=False)
+
+script_path = os.path.join(logdir, "script.sh")
+with open(script_path, "w") as f:
+    f.write("#!/bin/bash")
+    f.write("\n")
+    f.write("python ")
+    f.write(" ".join(sys.argv))
+
+checkpoint_file = os.path.join(exp_checkpoint_dir, "latest_epoch.pth")
+best_model_dir = os.path.join(exp_checkpoint_dir, "models")
+best_model_file = "{Validation_PSNR:.2f}"
+report_file = os.path.join(exp_checkpoint_dir, "report.txt")
 
 
 class SaveModelCallback(pl.Callback):
     def on_train_end(self, trainer, pl_module):
         torch.save(pl_module.state_dict(), checkpoint_file)
-        validate(pl_module, valid_loader)
+        validate(pl_module, train_loader, "train", exp_log_dir)
 
 
 checkpoint_callback = ModelCheckpoint(
@@ -61,24 +106,28 @@ checkpoint_callback = ModelCheckpoint(
 
 early_stopping = pl.callbacks.EarlyStopping("Validation_PSNR", 0.001, 10, True, "max")
 profiler = pl.profiler.AdvancedProfiler(report_file)
-
 callbacks = [SaveModelCallback(), checkpoint_callback, early_stopping]
+tb_logger = pl_loggers.TensorBoardLogger(save_dir=logdir, name=exp_id, version=args.seed, log_graph=True)
 
+epochs = args.epochs
 trainer = Trainer(
-    gpus=1,
+    gpus=1 if device == "cuda" else 0,
     profiler=profiler,
     callbacks=callbacks,
-    min_epochs=300,
+    min_epochs=epochs,
+    max_epochs=epochs + 5,
     progress_bar_refresh_rate=20,
     weights_summary="top",
     benchmark=True,
+    logger=tb_logger,
 )
 
 trainer.fit(model, train_loader, valid_loader)
 
-final_checkpoint_file = os.path.join(save_dir, "final_epoch.pth")
+final_checkpoint_file = os.path.join(exp_checkpoint_dir, "final_epoch.pth")
 torch.save(model.state_dict(), final_checkpoint_file)
 
 model.eval()
-df = validate(model, valid_loader)
-df = validate(model, test_loader)
+model = model.to(device)
+df = validate(model, valid_loader, "valid", exp_log_dir)
+df = validate(model, test_loader, "test", exp_log_dir)

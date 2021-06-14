@@ -20,8 +20,8 @@ cnn_normalization_std = torch.tensor([0.229, 0.224, 0.225]).to(device)
 class Normalization(nn.Module):
     def __init__(self, mean, std):
         super(Normalization, self).__init__()
-        self.mean = torch.tensor(mean).view(-1, 1, 1)
-        self.std = torch.tensor(std).view(-1, 1, 1)
+        self.mean = mean.clone().detach().view(-1, 1, 1)
+        self.std = std.clone().detach().view(-1, 1, 1)
 
     def forward(self, img):
         return (img - self.mean) / self.std
@@ -257,6 +257,9 @@ class CALayer(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
         # feature channel downscale and upscale --> channel weight
+        # print(channels)
+        # print(reduction)
+        # print(channels // reduction)
         self.conv_du = nn.Sequential(
             nn.Conv2d(channels, channels // reduction, 1, padding=0, bias=True),
             nn.ReLU(inplace=True),
@@ -272,6 +275,22 @@ class CALayer(nn.Module):
         return x * y
 
 
+class PixelAttention(nn.Module):
+    def __init__(self, nf):
+
+        super(PixelAttention, self).__init__()
+        self.conv = nn.Conv2d(nf, nf, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+
+        y = self.conv(x)
+        y = self.sigmoid(y)
+        out = torch.mul(x, y)
+
+        return out
+
+
 class Upsample(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Upsample, self).__init__()
@@ -284,7 +303,7 @@ class Upsample(nn.Module):
 
 
 class ConvTranspose2d(nn.Module):
-    def __init__(self, in_channels, out_channels, dropout=0.0):
+    def __init__(self, in_channels, out_channels, dropout=0.0, attention_type="channel", reduction=16):
         super(ConvTranspose2d, self).__init__()
 
         layers = [ResidualBlock(out_channels, out_channels)]
@@ -293,7 +312,12 @@ class ConvTranspose2d(nn.Module):
 
         self.model = nn.Sequential(*layers)
         self.up = Upsample(in_channels, out_channels)
-        self.attn = CALayer(out_channels)
+        if attention_type == "channel":
+            self.attn = CALayer(out_channels, reduction=reduction)
+        elif attention_type == "pixel":
+            self.attn = PixelAttention(out_channels)
+        else:
+            raise NotImplementedError(attention_type)
 
     def forward(self, x, skip_x):
         x = self.up(x)
@@ -379,11 +403,70 @@ class FMMRNet(nn.Module):
         return clear, res
 
 
-initial_lr = 4e-4
-beta1 = 0.5
-beta2 = 0.999
-lr = 1e-4
-gamma = 0.8
+class FMMRNetModular(nn.Module):
+    def __init__(self, input_size=256, channel_mul=16, depth=5, center_depth=4, attention_type="channel", reduction=16):
+        super(FMMRNetModular, self).__init__()
+
+        assert input_size >= np.power(2, depth), "Latent size will diminish to zero."
+        assert channel_mul >= reduction, "For channel attention, the reduction <= channel_mul"
+        self.channel_mul = channel_mul
+        self.depth = depth
+        self.init = nn.Sequential(
+            Conv(3, self.channel_mul // 2, 1),
+            ConvLayer(self.channel_mul // 2, self.channel_mul, kernel_size=3, stride=1),
+            ConvLayer(self.channel_mul, self.channel_mul, kernel_size=3, stride=1),
+        )
+
+        encoder_blocks = []
+        decoder_blocks = []
+
+        for i in range(self.depth):
+            dim1 = self.channel_mul * np.power(2, i)
+            dim2 = self.channel_mul * np.power(2, i + 1) if i != self.depth - 1 else self.channel_mul * np.power(2, i)
+            encoder_blocks.append(nn.Sequential(FMGCBlock(dim1, dim1), ConvLayer(dim1, dim2, kernel_size=3, stride=2)))
+
+            dim3 = self.channel_mul * np.power(2, self.depth - i)
+            dim4 = dim3 // 2
+            dim3 = self.channel_mul * np.power(2, self.depth - i - 1) if i == 0 else dim3
+            # print("Block: ", i)
+            # print("dim3: ", dim3)
+            # print("dim4: ", dim4)
+            # print("multiplier: ", np.power(2, self.depth - i - 1))
+            decoder_blocks.append(ConvTranspose2d(dim3, dim4, attention_type=attention_type, reduction=reduction))
+
+        self.encoder = nn.ModuleList(encoder_blocks)
+        self.center_block = nn.Sequential(
+            *[
+                ResidualBlock(self.channel_mul * np.power(2, self.depth - 1), self.channel_mul * np.power(2, self.depth - 1))
+                for _ in range(center_depth)
+            ]
+        )
+        self.decoder = nn.ModuleList(decoder_blocks)
+        self.rgb_convs = nn.ModuleList(
+            [RGBConv(self.channel_mul * np.power(2, self.depth - i - 1)) for i in range(self.depth)]
+        )
+
+    def downsample(self, input):
+        input = [input] + [F.avg_pool2d(input, int(np.power(2, i))) for i in range(1, self.depth)]
+        return list(reversed(input))
+
+    def forward(self, x):
+        x1 = self.init(x)
+        encoder_outputs = [x1]
+        for i in range(self.depth):
+            encoder_out = self.encoder[i](encoder_outputs[-1])
+            encoder_outputs.append(encoder_out)
+        out = self.center_block(encoder_outputs[-1])
+        decoder_outputs = [out]
+        residual_outputs = []
+        for i in range(self.depth):
+            decoder_output = self.decoder[i](decoder_outputs[i], encoder_outputs[-2 - i])
+            rgb_output = self.rgb_convs[i](decoder_output)
+            decoder_outputs.append(decoder_output)
+            residual_outputs.append(rgb_output)
+        downsampled_inputs = self.downsample(x)
+        clear_outputs = [downsampled_inputs[i] - residual_outputs[i] for i in range(self.depth)]
+        return clear_outputs, residual_outputs
 
 
 class CNN(pl.LightningModule):
@@ -418,15 +501,19 @@ class CNN(pl.LightningModule):
 
 
 class DerainCNN(CNN):
-    def __init__(self):
+    def __init__(self, lr=1e-4, beta1=0.5, beta2=0.999, gamma=0.8):
         super(DerainCNN, self).__init__()
 
         self.model = FMMRNet()
         self.model.apply(weight_init)
 
         self.img_size = 256
-        self.patch = (1, self.img_size // 2 ** 5, self.img_size // 2 ** 5)
         self.imgs = []
+
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.gamma = gamma
 
     def pixel_loss(self, fake_y, y):
         return F.mse_loss(fake_y, y)
@@ -438,7 +525,7 @@ class DerainCNN(CNN):
         return loss_pixel
 
     def configure_optimizers(self):
-        optimizer_g = optim.Adam(self.model.parameters(), lr=lr, betas=(beta1, beta2))
+        optimizer_g = optim.Adam(self.model.parameters(), lr=self.lr, betas=(self.beta1, self.beta2))
         return optimizer_g
 
     def forward(self, x):
@@ -448,7 +535,7 @@ class DerainCNN(CNN):
     def loss_function(self, fake_y, y):
         loss_pixel = self.multiscale_loss(fake_y, y)
         loss_per = cal_perpetual_loss(fake_y[-1], y[-1])
-        loss_gen = loss_pixel + gamma * loss_per
+        loss_gen = loss_pixel + self.gamma * loss_per
         return loss_gen, loss_pixel, loss_per
 
     def training_step(self, batch, batch_idx):
@@ -486,9 +573,112 @@ class DerainCNN(CNN):
         return {"val_acc": psnr, "PSNR": psnr, "SSIM": ssim}
 
     def validation_epoch_end(self, outputs):
-        avg_loss = torch.stack([x["val_acc"] for x in outputs]).mean()
-        avg_psnr = torch.stack([x["PSNR"] for x in outputs]).mean()
-        avg_ssim = torch.stack([x["SSIM"] for x in outputs]).mean()
+        avg_loss = torch.FloatTensor([x["val_acc"] for x in outputs]).mean()
+        avg_psnr = torch.FloatTensor([x["PSNR"] for x in outputs]).mean()
+        avg_ssim = torch.FloatTensor([x["SSIM"] for x in outputs]).mean()
+
+        self.log("Validation_PSNR", avg_psnr)
+        self.log("Validation_SSIM", avg_ssim)
+        self.logger.experiment.add_image("Validation_Set_Images", self.imgs)
+        return avg_loss
+
+
+class DerainCNNModular(CNN):
+    def __init__(
+        self,
+        input_size=256,
+        channel_mul=16,
+        depth=5,
+        center_depth=4,
+        attention_type="channel",
+        reduction=16,
+        lr=1e-4,
+        beta1=0.5,
+        beta2=0.999,
+        gamma=0.8,
+    ):
+        super().__init__()
+
+        self.model = FMMRNetModular(
+            input_size=input_size,
+            channel_mul=channel_mul,
+            depth=depth,
+            center_depth=center_depth,
+            attention_type=attention_type,
+            reduction=reduction,
+        )
+        self.model.apply(weight_init)
+
+        self.img_size = input_size
+        self.imgs = []
+        self.example_input_array = torch.rand(1, 3, self.img_size, self.img_size)
+
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.gamma = gamma
+
+    def pixel_loss(self, fake_y, y):
+        return F.mse_loss(fake_y, y)
+
+    def multiscale_loss(self, fake_y, y):
+        loss_pixel = 0
+        for i in range(len(fake_y)):
+            loss_pixel += (i + 1) * (self.pixel_loss(fake_y[i], y[i]))
+        return loss_pixel
+
+    def configure_optimizers(self):
+        optimizer_g = optim.Adam(self.model.parameters(), lr=self.lr, betas=(self.beta1, self.beta2))
+        return optimizer_g
+
+    def forward(self, x):
+        d_y, _ = self.model(x)
+        return d_y, d_y
+
+    def loss_function(self, fake_y, y):
+        loss_pixel = self.multiscale_loss(fake_y, y)
+        loss_per = cal_perpetual_loss(fake_y[-1], y[-1])
+        loss_gen = loss_pixel + self.gamma * loss_per
+        return loss_gen, loss_pixel, loss_per
+
+    def training_step(self, batch, batch_idx):
+        x, y, _ = batch
+        y = self.downsample(y)
+        fake_y, _ = self(x)
+
+        if batch_idx % 50 == 0:
+            result = torch.cat((x[:1], fake_y[-1][:1], y[-1][:1]))
+            grid = torchvision.utils.make_grid(result)
+            self.logger.experiment.add_image("Training_Set_Images", grid)
+
+        loss_gen, loss_pixel, loss_per = self.loss_function(fake_y, y)
+        psnr, loss_ssim = self.return_metrics(fake_y[-1], y[-1])
+
+        self.log("Generator_Loss/Total_Loss", loss_gen)
+        self.log("Generator_Loss/Pixel_Loss", loss_pixel)
+        self.log("Generator_Loss/PSNR_Loss", psnr, prog_bar=True)
+        self.log("Generator_Loss/Perceptual_Loss", loss_per)
+        self.log("Generator_Loss/SSIM_Loss", loss_ssim)
+        return loss_gen
+
+    def generate(self, x):
+        d_y, _ = self.model(x)
+        dy = [torch.clamp(imgy, 0.0, 1.0) for imgy in d_y]
+        return dy
+
+    def validation_step(self, batch, batch_id):
+        x, y, _ = batch
+        fake_y = self.generate(x)
+        psnr, ssim = self.return_metrics(fake_y[-1], y)
+        result = torch.cat((x[:1], fake_y[-1][:1], y[:1]))
+        grid = torchvision.utils.make_grid(result)
+        self.imgs = grid
+        return {"val_acc": psnr, "PSNR": psnr, "SSIM": ssim}
+
+    def validation_epoch_end(self, outputs):
+        avg_loss = torch.FloatTensor([x["val_acc"] for x in outputs]).mean()
+        avg_psnr = torch.FloatTensor([x["PSNR"] for x in outputs]).mean()
+        avg_ssim = torch.FloatTensor([x["SSIM"] for x in outputs]).mean()
 
         self.log("Validation_PSNR", avg_psnr)
         self.log("Validation_SSIM", avg_ssim)
