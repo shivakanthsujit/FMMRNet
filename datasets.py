@@ -49,13 +49,14 @@ def get_valid_transforms(input_size=256):
 train_transform = get_train_transforms()
 valid_transform = get_valid_transforms()
 
-BATCH_SIZE = 128
-NUM_WORKERS = 0
+BATCH_SIZE = 4
+SEED = 42
+NUM_WORKERS = 4
 kaggle.api.authenticate()
 
 
 class BaseDataModule(pl.LightningDataModule):
-    def __init__(self, batch_size=32, seed=42, num_workers=4, on_gpu=True):
+    def __init__(self, batch_size=BATCH_SIZE, seed=SEED, num_workers=NUM_WORKERS, on_gpu=True):
         super().__init__()
         self.batch_size = batch_size
         self.seed = seed
@@ -65,7 +66,7 @@ class BaseDataModule(pl.LightningDataModule):
     def show_sample(self, split="train"):
         assert split in ["train", "val", "test"], f"Invalid {split}"
         if hasattr(self, f"{split}_data"):
-            loader = getattr(self, f"{split}_loader")
+            loader = getattr(self, f"{split}_loader")()
             print(f"No. of batches in {split}: ", len(loader))
             x, y, z = next(iter(loader))
             show_images(torch.cat((x, y, z)))
@@ -83,7 +84,7 @@ class BaseDataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(
-            self.valid_data,
+            self.val_data,
             shuffle=False,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
@@ -157,9 +158,9 @@ class JRDRDataModule(BaseDataModule):
         dataset_type="Light",
         train_transform=train_transform,
         valid_transform=valid_transform,
-        batch_size=32,
-        seed=42,
-        num_workers=4,
+        batch_size=BATCH_SIZE,
+        seed=SEED,
+        num_workers=NUM_WORKERS,
         on_gpu=True,
     ):
         super().__init__(batch_size=batch_size, seed=seed, num_workers=num_workers, on_gpu=on_gpu)
@@ -169,15 +170,15 @@ class JRDRDataModule(BaseDataModule):
         self.type = dataset_type
 
     def prepare_data(self):
-        kaggle.api.dataset_download_files("shivakanthsujit/jrdr-deraining-dataset", path=self.data_dir, unzip=True)
+        dataset_dir = os.path.join(self.data_dir, "JRDR")
+        if not os.path.exists(dataset_dir):
+            kaggle.api.dataset_download_files("shivakanthsujit/jrdr-deraining-dataset", path=self.data_dir, unzip=True)
 
     def setup(self, stage):
         dataset_dir = os.path.join(self.data_dir, "JRDR")
-        if stage == "fit" or stage is None:
-            data = JRDR(root=dataset_dir, type=self.type, split="train", transform=self.train_transform)
-            self.train_data, self.val_data = split_dataset(data, 0.8, self.seed)
-        if stage == "test" or stage is None:
-            self.test_data = JRDR(root=dataset_dir, type=self.type, split="test", transform=self.valid_transform)
+        data = JRDR(root=dataset_dir, type=self.type, split="train", transform=self.train_transform)
+        self.train_data, self.val_data = split_dataset(data, 0.8, self.seed)
+        self.test_data = JRDR(root=dataset_dir, type=self.type, split="test", transform=self.valid_transform)
 
 
 class li_cvpr(torch.utils.data.Dataset):
@@ -219,9 +220,9 @@ class Rain12DataModule(BaseDataModule):
         data_dir="data/",
         train_transform=train_transform,
         valid_transform=valid_transform,
-        batch_size=32,
-        seed=42,
-        num_workers=4,
+        batch_size=BATCH_SIZE,
+        seed=SEED,
+        num_workers=NUM_WORKERS,
         on_gpu=True,
     ):
         super().__init__(batch_size=batch_size, seed=seed, num_workers=num_workers, on_gpu=on_gpu)
@@ -295,9 +296,9 @@ class IDCGANDataModule(BaseDataModule):
         syn=True,
         train_transform=train_transform,
         valid_transform=valid_transform,
-        batch_size=32,
-        seed=42,
-        num_workers=4,
+        batch_size=BATCH_SIZE,
+        seed=SEED,
+        num_workers=NUM_WORKERS,
         on_gpu=True,
     ):
         super().__init__(batch_size=batch_size, seed=seed, num_workers=num_workers, on_gpu=on_gpu)
@@ -324,10 +325,10 @@ def get_train_valid_loader(
     batch_size=4,
     valid_size=0.1,
     show_sample=False,
-    num_workers=4,
+    num_workers=NUM_WORKERS,
     pin_memory=False,
     shuffle=True,
-    seed=42,
+    seed=SEED,
 ):
     error_msg = "[!] valid_size should be in the range [0, 1]."
     assert (valid_size >= 0) and (valid_size <= 1), error_msg
@@ -370,7 +371,7 @@ def get_train_valid_loader(
     return train_loader, valid_loader
 
 
-def get_test_loader(test_data, batch_size=1, shuffle=False, num_workers=4, pin_memory=False):
+def get_test_loader(test_data, batch_size=1, shuffle=False, num_workers=NUM_WORKERS, pin_memory=False):
 
     test_loader = DataLoader(
         test_data,

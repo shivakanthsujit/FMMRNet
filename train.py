@@ -89,7 +89,7 @@ with open(script_path, "w") as f:
 
 checkpoint_file = os.path.join(exp_log_dir, "latest_epoch.pth")
 best_model_dir = os.path.join(exp_log_dir, "models")
-best_model_file = "{Validation_PSNR:.2f}"
+best_model_file = "{valid/PSNR:.2f}"
 report_file = os.path.join(exp_log_dir, "report.txt")
 
 
@@ -104,11 +104,11 @@ checkpoint_callback = ModelCheckpoint(
     dirpath=best_model_dir,
     filename=best_model_file,
     verbose=True,
-    monitor="Validation_PSNR",
+    monitor="valid/PSNR",
     mode="max",
 )
 
-early_stopping = pl.callbacks.EarlyStopping("Validation_PSNR", 0.001, 10, True, "max")
+early_stopping = pl.callbacks.EarlyStopping("valid/PSNR", 0.001, 10, True, "max")
 profiler = pl.profiler.AdvancedProfiler(report_file)
 callbacks = [SaveModelCallback(), checkpoint_callback, early_stopping]
 tb_logger = pl_loggers.TensorBoardLogger(save_dir=logdir, name=exp_id, version=args.seed, log_graph=True)

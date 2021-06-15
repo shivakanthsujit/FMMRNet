@@ -72,7 +72,7 @@ input_size = args.input_size
 train_transform = get_train_transforms(input_size)
 valid_transform = get_valid_transforms(input_size)
 assert args.dataset in AVAILABLE_DATASETS, f"Dataset {args.dataset} not found."
-data_class = _import_class(f"dataset.{args.dataset}")
+data_class = _import_class(f"datasets.{args.dataset}DataModule")
 data = data_class(args.data_dir, train_transform=train_transform, valid_transform=valid_transform)
 
 base = FMMRNetModular(
@@ -99,19 +99,20 @@ print(f"Logging to {exp_logdir}")
 save_experiment_details(exp_logdir, args)
 
 model_checkpoint_dir = os.path.join(exp_logdir, "models")
-best_model_file = "{epoch:03d}-{Validation_PSNR:.2f}"
+os.makedirs(model_checkpoint_dir, exist_ok=True)
+best_model_file = "{epoch:03d}-{valid/PSNR:.2f}"
 checkpoint_callback = ModelCheckpoint(
     period=1,
     dirpath=model_checkpoint_dir,
     filename=best_model_file,
     verbose=True,
-    monitor="Validation_PSNR",
+    monitor="valid/PSNR",
     mode="max",
 )
 
-early_stopping = pl.callbacks.EarlyStopping("Validation_PSNR", 0.001, 10, True, "max")
+early_stopping = pl.callbacks.EarlyStopping("valid/PSNR", 0.001, 10, True, "max")
 callbacks = [checkpoint_callback, early_stopping]
-tb_logger = pl_loggers.TensorBoardLogger(save_dir=args.logdir, name=exp_id, version=args.seed, log_graph=True)
+tb_logger = pl_loggers.TensorBoardLogger(save_dir=args.logdir, name=exp_id, version=args.seed)
 
 epochs = args.epochs
 trainer = Trainer(
@@ -123,6 +124,7 @@ trainer = Trainer(
     weights_summary="top",
     benchmark=True,
     logger=tb_logger,
+    check_val_every_n_epoch=10,
 )
 
 trainer.fit(model, datamodule=data)
@@ -132,6 +134,6 @@ torch.save(model.state_dict(), final_checkpoint_file)
 
 model.eval()
 model = model.to(device)
-validate(model, data.train_loader, "train", exp_logdir)
-validate(model, data.val_loader, "valid", exp_logdir)
-validate(model, data.test_loader, "test", exp_logdir)
+validate(model, data.train_dataloader(), "train", exp_logdir)
+validate(model, data.val_dataloader(), "valid", exp_logdir)
+validate(model, data.test_dataloader(), "test", exp_logdir)

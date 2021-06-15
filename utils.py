@@ -1,6 +1,5 @@
 import os
 import random
-from statistics import mean
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,13 +18,18 @@ class TrackLosses(object):
 
     def update(self, x):
         self.last_value = x
-        self.values.append(x)
-        self.average = mean(self.values)
+        self.values.append(x.item())
+
+    @property
+    def average(self):
+        if len(self.values) > 0:
+            return np.mean(self.values)
+        else:
+            return 0.0
 
     def reset(self):
         self.last_value = 0
         self.values = []
-        self.average = 0
 
     def plot(self):
         plt.scatter(np.arange(0, len(self.values)), self.values, s=1, label=self.name)

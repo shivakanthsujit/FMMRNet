@@ -480,11 +480,11 @@ class CNN(pl.LightningModule):
     def get_psnr(self, fake_y, y):
         temp = F.mse_loss(fake_y, y)
         psnr = -10 * torch.log10(temp)
-        return psnr.item()
+        return psnr
 
     def get_ssim(self, fake_y, y):
         ssim = pyssim(y, fake_y, data_range=1.0)
-        return ssim.item()
+        return ssim
 
     def return_metrics(self, input, target):
         psnr = self.get_psnr(input, target)
@@ -546,16 +546,16 @@ class DerainCNN(CNN):
         if batch_idx % 50 == 0:
             result = torch.cat((x[:1], fake_y[-1][:1], y[-1][:1]))
             grid = torchvision.utils.make_grid(result)
-            self.logger.experiment.add_image("Training_Set_Images", grid)
+            self.logger.experiment.add_image("train_images", grid)
 
         loss_gen, loss_pixel, loss_per = self.loss_function(fake_y, y)
         psnr, loss_ssim = self.return_metrics(fake_y[-1], y[-1])
 
-        self.log("Generator_Loss/Total_Loss", loss_gen)
-        self.log("Generator_Loss/Pixel_Loss", loss_pixel)
-        self.log("Generator_Loss/PSNR_Loss", psnr, prog_bar=True)
-        self.log("Generator_Loss/Perceptual_Loss", loss_per)
-        self.log("Generator_Loss/SSIM_Loss", loss_ssim)
+        self.log("train/Total_Loss", loss_gen)
+        self.log("train/Pixel_Loss", loss_pixel)
+        self.log("train/PSNR_Loss", psnr, prog_bar=True)
+        self.log("train/Perceptual_Loss", loss_per)
+        self.log("train/SSIM_Loss", loss_ssim)
         return loss_gen
 
     def generate(self, x):
@@ -577,9 +577,9 @@ class DerainCNN(CNN):
         avg_psnr = torch.FloatTensor([x["PSNR"] for x in outputs]).mean()
         avg_ssim = torch.FloatTensor([x["SSIM"] for x in outputs]).mean()
 
-        self.log("Validation_PSNR", avg_psnr)
-        self.log("Validation_SSIM", avg_ssim)
-        self.logger.experiment.add_image("Validation_Set_Images", self.imgs)
+        self.log("valid/PSNR", avg_psnr)
+        self.log("valid/SSIM", avg_ssim)
+        self.logger.experiment.add_image("valid_images", self.imgs)
         return avg_loss
 
 
@@ -624,8 +624,7 @@ class DerainCNNModular(CNN):
         return optimizer_g
 
     def forward(self, x):
-        d_y, d_z = self.model(x)
-        return d_y, d_z
+        return self.model(x)
 
     def loss_function(self, fake_y, y):
         loss_pixel = self.multiscale_loss(fake_y, y)
@@ -641,20 +640,20 @@ class DerainCNNModular(CNN):
         if batch_idx % 50 == 0:
             result = torch.cat((x[:1], fake_y[-1][:1], y[-1][:1]))
             grid = torchvision.utils.make_grid(result)
-            self.logger.experiment.add_image("Training_Set_Images", grid)
+            self.logger.experiment.add_image("train_images", grid)
 
         loss_gen, loss_pixel, loss_per = self.loss_function(fake_y, y)
-        psnr, loss_ssim = self.return_metrics(fake_y[-1], y[-1])
+        psnr, ssim = self.return_metrics(fake_y[-1], y[-1])
 
-        self.log("Generator_Loss/Total_Loss", loss_gen, on_step=False, on_epoch=True)
-        self.log("Generator_Loss/Pixel_Loss", loss_pixel, on_step=False, on_epoch=True)
-        self.log("Generator_Loss/PSNR_Loss", psnr, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("Generator_Loss/Perceptual_Loss", loss_per, on_step=False, on_epoch=True)
-        self.log("Generator_Loss/SSIM_Loss", loss_ssim, on_step=False, on_epoch=True)
+        self.log("train/loss/total", loss_gen, on_step=False, on_epoch=True)
+        self.log("train/loss/pixel", loss_pixel, on_step=False, on_epoch=True)
+        self.log("train/loss/perceptual", loss_per, on_step=False, on_epoch=True)
+        self.log("train/PSNR", psnr, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/SSIM", ssim, on_step=False, on_epoch=True)
         return loss_gen
 
     def generate(self, x):
-        d_y, _ = self.model(x)
+        d_y, _ = self(x)
         dy = [torch.clamp(imgy, 0.0, 1.0) for imgy in d_y]
         return dy
 
@@ -665,11 +664,11 @@ class DerainCNNModular(CNN):
         result = torch.cat((x[:1], fake_y[-1][:1], y[:1]))
         grid = torchvision.utils.make_grid(result)
         self.imgs = grid
-        self.log("Validation_PSNR", psnr, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("Validation_SSIM", ssim, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("valid/PSNR", psnr, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("valid/SSIM", ssim, on_step=False, on_epoch=True, prog_bar=False)
 
     def validation_epoch_end(self, outputs):
-        self.logger.experiment.add_image("Validation_Set_Images", self.imgs)
+        self.logger.experiment.add_image("valid_images", self.imgs)
 
     def test_step(self, batch, batch_idx):
         x, y, _ = batch
@@ -677,6 +676,9 @@ class DerainCNNModular(CNN):
         psnr, ssim = self.return_metrics(fake_y[-1], y)
         result = torch.cat((x[:1], fake_y[-1][:1], y[:1]))
         grid = torchvision.utils.make_grid(result)
-        self.imgs = grid
-        self.log("Test_PSNR", psnr, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("Test_SSIM", ssim, on_step=False, on_epoch=True, prog_bar=True)
+        self.test_imgs = grid
+        self.log("test/PSNR", psnr, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/SSIM", ssim, on_step=False, on_epoch=True, prog_bar=False)
+
+    def test_epoch_end(self, outputs):
+        self.logger.experiment.add_image("Test_Set_Images", self.imgs)
