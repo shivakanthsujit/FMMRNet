@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import os
 import random
 import sys
@@ -18,8 +19,33 @@ from datasets import (
     get_train_valid_loader,
     get_valid_transforms,
 )
-from models import DerainCNN, DerainCNNModular
+from models import DerainCNNModular, FMMRNetModular
 from utils import set_seed, validate
+
+AVAILABLE_DATASETS = ["JRDR"]
+
+
+def _import_class(module_and_class_name: str) -> type:
+    """Import class from a module"""
+    module_name, class_name = module_and_class_name.rsplit(".", 1)
+    module = importlib.import_module(module_name)
+    class_ = getattr(module, class_name)
+    return class_
+
+
+def save_experiment_details(logdir, args):
+    config_path = os.path.join(logdir, "configs.yaml")
+    command_args = dict(defaults=vars(args))
+    with open(config_path, "w") as f:
+        yaml.dump(command_args, f, default_flow_style=False)
+
+    script_path = os.path.join(logdir, "script.sh")
+    with open(script_path, "w") as f:
+        f.write("#!/bin/bash")
+        f.write("\n")
+        f.write("python ")
+        f.write(" ".join(sys.argv))
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--id", type=str, default="default")
@@ -27,6 +53,7 @@ parser.add_argument("--logdir", type=str, default="logs/")
 parser.add_argument("--epochs", type=int, default=300)
 parser.add_argument("--input_size", type=int, default=256)
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--data_dir", type=str, default="data")
 parser.add_argument("--dataset", type=str, default="JRDR")
 parser.add_argument("--device", type=str, default="cuda")
 parser.add_argument("--channel_mul", type=int, default=16)
@@ -44,64 +71,38 @@ set_seed(args.seed)
 input_size = args.input_size
 train_transform = get_train_transforms(input_size)
 valid_transform = get_valid_transforms(input_size)
-if args.dataset == "JRDR":
-    dataset_dir = os.path.join("data", "JRDR")
-    test_dir = os.path.join("data", "JRDR")
-    train_data = JRDR(root=dataset_dir, transform=train_transform)
-    valid_data = JRDR(root=dataset_dir, transform=valid_transform)
-    test_data = JRDR(root=test_dir, split="test", transform=valid_transform)
-else:
-    raise NotImplementedError(args.dataset)
+assert args.dataset in AVAILABLE_DATASETS, f"Dataset {args.dataset} not found."
+data_class = _import_class(f"dataset.{args.dataset}")
+data = data_class(args.data_dir, train_transform=train_transform, valid_transform=valid_transform)
 
-train_loader, valid_loader = get_train_valid_loader(train_data, valid_data, show_sample=False)
-test_loader = get_test_loader(test_data)
-
-model = DerainCNNModular(
-    input_size=input_size,
+base = FMMRNetModular(
+    input_size=args.input_size,
     channel_mul=args.channel_mul,
     depth=args.depth,
     center_depth=args.center_depth,
     attention_type=args.attention_type,
     reduction=args.reduction,
+)
+
+model = DerainCNNModular(
+    model=base,
+    input_size=input_size,
     lr=args.lr,
     gamma=args.gamma,
 )
 
 exp_id = os.path.join(args.dataset, args.id)
-logdir = args.logdir
+exp_logdir = os.path.join(args.logdir, exp_id, f"version_{args.seed}")
+os.makedirs(exp_logdir, exist_ok=True)
+print(f"Logging to {exp_logdir}")
 
-exp_log_dir = os.path.join(logdir, exp_id, str(args.seed))
-os.makedirs(exp_log_dir, exist_ok=True)
-print(f"Logging to {exp_log_dir}")
-print(f"Checkpoint saved to {exp_log_dir}")
+save_experiment_details(exp_logdir, args)
 
-config_path = os.path.join(exp_log_dir, "configs.yaml")
-command_args = dict(defaults=vars(args))
-with open(config_path, "w") as f:
-    yaml.dump(command_args, f, default_flow_style=False)
-
-script_path = os.path.join(exp_log_dir, "script.sh")
-with open(script_path, "w") as f:
-    f.write("#!/bin/bash")
-    f.write("\n")
-    f.write("python ")
-    f.write(" ".join(sys.argv))
-
-checkpoint_file = os.path.join(exp_log_dir, "latest_epoch.pth")
-best_model_dir = os.path.join(exp_log_dir, "models")
-best_model_file = "{Validation_PSNR:.2f}"
-report_file = os.path.join(exp_log_dir, "report.txt")
-
-
-class SaveModelCallback(pl.Callback):
-    def on_train_end(self, trainer, pl_module):
-        torch.save(pl_module.state_dict(), checkpoint_file)
-        validate(pl_module, train_loader, "train", exp_log_dir)
-
-
+model_checkpoint_dir = os.path.join(exp_logdir, "models")
+best_model_file = "{epoch:03d}-{Validation_PSNR:.2f}"
 checkpoint_callback = ModelCheckpoint(
     period=1,
-    dirpath=best_model_dir,
+    dirpath=model_checkpoint_dir,
     filename=best_model_file,
     verbose=True,
     monitor="Validation_PSNR",
@@ -109,14 +110,12 @@ checkpoint_callback = ModelCheckpoint(
 )
 
 early_stopping = pl.callbacks.EarlyStopping("Validation_PSNR", 0.001, 10, True, "max")
-profiler = pl.profiler.AdvancedProfiler(report_file)
-callbacks = [SaveModelCallback(), checkpoint_callback, early_stopping]
-tb_logger = pl_loggers.TensorBoardLogger(save_dir=logdir, name=exp_id, version=args.seed, log_graph=True)
+callbacks = [checkpoint_callback, early_stopping]
+tb_logger = pl_loggers.TensorBoardLogger(save_dir=args.logdir, name=exp_id, version=args.seed, log_graph=True)
 
 epochs = args.epochs
 trainer = Trainer(
     gpus=1 if device == "cuda" else 0,
-    profiler=profiler,
     callbacks=callbacks,
     min_epochs=epochs,
     max_epochs=epochs + 5,
@@ -126,12 +125,13 @@ trainer = Trainer(
     logger=tb_logger,
 )
 
-trainer.fit(model, train_loader, valid_loader)
+trainer.fit(model, datamodule=data)
 
-final_checkpoint_file = os.path.join(exp_log_dir, "final_epoch.pth")
+final_checkpoint_file = os.path.join(model_checkpoint_dir, "final_epoch.pth")
 torch.save(model.state_dict(), final_checkpoint_file)
 
 model.eval()
 model = model.to(device)
-df = validate(model, valid_loader, "valid", exp_log_dir)
-df = validate(model, test_loader, "test", exp_log_dir)
+validate(model, data.train_loader, "train", exp_logdir)
+validate(model, data.val_loader, "valid", exp_logdir)
+validate(model, data.test_loader, "test", exp_logdir)

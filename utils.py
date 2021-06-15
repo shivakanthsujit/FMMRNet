@@ -1,6 +1,6 @@
 import os
-from statistics import mean
 import random
+from statistics import mean
 
 import matplotlib.pyplot as plt
 import numpy as np

@@ -2,10 +2,13 @@ import glob
 import os
 
 import albumentations as A
+import kaggle
 import numpy as np
 import PIL
+import pytorch_lightning as pl
 import torch
 from albumentations.pytorch import ToTensorV2
+from torch.utils.data import random_split
 from torch.utils.data.dataloader import DataLoader
 
 from utils import show_images
@@ -46,6 +49,63 @@ def get_valid_transforms(input_size=256):
 train_transform = get_train_transforms()
 valid_transform = get_valid_transforms()
 
+BATCH_SIZE = 128
+NUM_WORKERS = 0
+kaggle.api.authenticate()
+
+
+class BaseDataModule(pl.LightningDataModule):
+    def __init__(self, batch_size=32, seed=42, num_workers=4, on_gpu=True):
+        super().__init__()
+        self.batch_size = batch_size
+        self.seed = seed
+        self.num_workers = num_workers
+        self.on_gpu = on_gpu
+
+    def show_sample(self, split="train"):
+        assert split in ["train", "val", "test"], f"Invalid {split}"
+        if hasattr(self, f"{split}_data"):
+            loader = getattr(self, f"{split}_loader")
+            print(f"No. of batches in {split}: ", len(loader))
+            x, y, z = next(iter(loader))
+            show_images(torch.cat((x, y, z)))
+        else:
+            print(f"Split {split} not found")
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_data,
+            shuffle=True,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            pin_memory=self.on_gpu,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.valid_data,
+            shuffle=False,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            pin_memory=self.on_gpu,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_data,
+            shuffle=False,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            pin_memory=self.on_gpu,
+        )
+
+
+def split_dataset(data, frac, seed):
+    assert isinstance(frac, float) and frac <= 1.0 and frac >= 0.0, f"Invalid fraction {frac}"
+    train_split = int(len(data) * frac)
+    val_split = len(data) - train_split
+    return random_split(data, [train_split, val_split], generator=torch.Generator().manual_seed(seed))
+
 
 class JRDR(torch.utils.data.Dataset):
     def __init__(self, root, type="Light", split="train", transform=train_transform):
@@ -85,6 +145,41 @@ class JRDR(torch.utils.data.Dataset):
         return len(glob.glob(self.norain_dir + "/*.*"))
 
 
+class JRDRDataModule(BaseDataModule):
+    """
+    JRDR DataModule for PyTorch-Lightning
+    Learn more at https://pytorch-lightning.readthedocs.io/en/stable/extensions/datamodules.html
+    """
+
+    def __init__(
+        self,
+        data_dir="data/",
+        dataset_type="Light",
+        train_transform=train_transform,
+        valid_transform=valid_transform,
+        batch_size=32,
+        seed=42,
+        num_workers=4,
+        on_gpu=True,
+    ):
+        super().__init__(batch_size=batch_size, seed=seed, num_workers=num_workers, on_gpu=on_gpu)
+        self.data_dir = data_dir
+        self.train_transform = train_transform
+        self.valid_transform = valid_transform
+        self.type = dataset_type
+
+    def prepare_data(self):
+        kaggle.api.dataset_download_files("shivakanthsujit/jrdr-deraining-dataset", path=self.data_dir, unzip=True)
+
+    def setup(self, stage):
+        dataset_dir = os.path.join(self.data_dir, "JRDR")
+        if stage == "fit" or stage is None:
+            data = JRDR(root=dataset_dir, type=self.type, split="train", transform=self.train_transform)
+            self.train_data, self.val_data = split_dataset(data, 0.8, self.seed)
+        if stage == "test" or stage is None:
+            self.test_data = JRDR(root=dataset_dir, type=self.type, split="test", transform=self.valid_transform)
+
+
 class li_cvpr(torch.utils.data.Dataset):
     def __init__(self, root, transform=valid_transform):
         self.root = root
@@ -111,6 +206,39 @@ class li_cvpr(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.rain_files)
+
+
+class Rain12DataModule(BaseDataModule):
+    """
+    Rain12 DataModule for PyTorch-Lightning
+    Learn more at https://pytorch-lightning.readthedocs.io/en/stable/extensions/datamodules.html
+    """
+
+    def __init__(
+        self,
+        data_dir="data/",
+        train_transform=train_transform,
+        valid_transform=valid_transform,
+        batch_size=32,
+        seed=42,
+        num_workers=4,
+        on_gpu=True,
+    ):
+        super().__init__(batch_size=batch_size, seed=seed, num_workers=num_workers, on_gpu=on_gpu)
+        self.data_dir = data_dir
+        self.train_transform = train_transform
+        self.valid_transform = valid_transform
+
+    def prepare_data(self):
+        kaggle.api.dataset_download_files("shivakanthsujit/li-cvpr-dataset", path=self.data_dir, unzip=True)
+
+    def setup(self, stage):
+        dataset_dir = os.path.join(self.data_dir, "Rain12")
+        if stage == "fit" or stage is None:
+            data = li_cvpr(root=dataset_dir, transform=self.train_transform)
+            self.train_data, self.val_data = split_dataset(data, 0.8, self.seed)
+        if stage == "test" or stage is None:
+            self.test_data = li_cvpr(root=dataset_dir, transform=self.valid_transform)
 
 
 class IDGAN(torch.utils.data.Dataset):
@@ -153,6 +281,41 @@ class IDGAN(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(glob.glob(self.norain_dir + "/*.*"))
+
+
+class IDCGANDataModule(BaseDataModule):
+    """
+    IDCGAN DataModule for PyTorch-Lightning
+    Learn more at https://pytorch-lightning.readthedocs.io/en/stable/extensions/datamodules.html
+    """
+
+    def __init__(
+        self,
+        data_dir="data/",
+        syn=True,
+        train_transform=train_transform,
+        valid_transform=valid_transform,
+        batch_size=32,
+        seed=42,
+        num_workers=4,
+        on_gpu=True,
+    ):
+        super().__init__(batch_size=batch_size, seed=seed, num_workers=num_workers, on_gpu=on_gpu)
+        self.data_dir = data_dir
+        self.train_transform = train_transform
+        self.valid_transform = valid_transform
+        self.syn = syn
+
+    def prepare_data(self):
+        kaggle.api.dataset_download_files("shivakanthsujit/idgan-dataset", path=self.data_dir, unzip=True)
+
+    def setup(self, stage):
+        dataset_dir = os.path.join(self.data_dir, "IDGAN")
+        if stage == "fit" or stage is None:
+            data = IDGAN(root=dataset_dir, syn=self.syn, transform=self.train_transform)
+            self.train_data, self.val_data = split_dataset(data, 0.8, self.seed)
+        if stage == "test" or stage is None:
+            self.test_data = IDGAN(root=dataset_dir, syn=self.syn, split="test", transform=self.valid_transform)
 
 
 def get_train_valid_loader(

@@ -30,6 +30,16 @@ pip install -r requirements.txt
 
 Download the dataset from <https://www.kaggle.com/shivakanthsujit/jrdr-deraining-dataset> and place the `JRDR` folder in `data`.
 
+Setup the Kaggle-API for downloading from the command line
+
+```bash
+pip install kaggle --upgrade
+mkdir ~/.kaggle
+cp kaggle.json ~/.kaggle/
+chmod 600 ~/.kaggle/kaggle.json
+kaggle datasets -h # Tests if the command works
+```
+
 ## Training
 
 ```bash
