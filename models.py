@@ -178,56 +178,107 @@ class Bottleneck(nn.Module):
         return out
 
 
-class FMGCBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+# class FMGCBlock(nn.Module):
+#     def __init__(self, in_channels, out_channels):
 
-        super(FMGCBlock, self).__init__()
+#         super(FMGCBlock, self).__init__()
 
-        self.conv_init = nn.Sequential(
-            ConvLayer(in_channels, out_channels, kernel_size=1, stride=1),
-            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
-        )
+#         self.conv_init = nn.Sequential(
+#             ConvLayer(in_channels, out_channels, kernel_size=1, stride=1),
+#             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+#         )
 
-        self.branch0 = ConvLayer(in_channels, out_channels, kernel_size=1, stride=1)
-        self.branch1 = nn.Sequential(
+#         self.branch0 = ConvLayer(in_channels, out_channels, kernel_size=1, stride=1)
+#         self.branch1 = nn.Sequential(
+#             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
+#             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+#         )
+#         self.branch2 = nn.Sequential(
+#             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
+#             Conv(out_channels, out_channels, kernel_size=(3, 1), stride=1, padding=(1, 0)),
+#             Conv(out_channels, out_channels, kernel_size=(1, 3), stride=1, padding=(0, 1)),
+#             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+#         )
+#         self.branch3 = nn.Sequential(
+#             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
+#             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+#             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+#         )
+
+#         self.branch4 = nn.Sequential(
+#             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
+#             Conv(out_channels, out_channels, kernel_size=(7, 1), stride=1, padding=(3, 0)),
+#             Conv(out_channels, out_channels, kernel_size=(1, 7), stride=1, padding=(0, 3)),
+#         )
+
+#         self.conv = Bottleneck(out_channels, out_channels)
+
+
+#     def forward(self, x):
+
+#         x0 = self.branch0(x)
+#         x = self.conv_init(x)
+#         x1 = self.branch1(x)
+#         x2 = self.branch2(x)
+#         x3 = self.branch3(x)
+#         x4 = self.branch4(x)
+
+#         x = torch.add(x0, x1)
+#         x = torch.add(x2, x)
+#         x = torch.add(x3, x)
+#         x = torch.add(x4, x)
+#         x = self.conv(x)
+
+#         return x
+
+def get_mutliscale_branch(in_channels, out_channels, kernel):
+    assert kernel in [1, 3, 5, 7], f"Invalid kernel size {kernel}"
+    if kernel == 1:
+        return nn.Sequential(
             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
         )
-        self.branch2 = nn.Sequential(
+    elif kernel == 3:
+        return nn.Sequential(
             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
             Conv(out_channels, out_channels, kernel_size=(3, 1), stride=1, padding=(1, 0)),
             Conv(out_channels, out_channels, kernel_size=(1, 3), stride=1, padding=(0, 1)),
             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
         )
-        self.branch3 = nn.Sequential(
+    elif kernel == 5:
+        return nn.Sequential(
             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
             ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
         )
-
-        self.branch4 = nn.Sequential(
+    elif kernel == 7:
+        return nn.Sequential(
             Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
             Conv(out_channels, out_channels, kernel_size=(7, 1), stride=1, padding=(3, 0)),
             Conv(out_channels, out_channels, kernel_size=(1, 7), stride=1, padding=(0, 3)),
         )
 
-        self.conv = Bottleneck(out_channels, out_channels)
+
+class FMGCBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, multiscale_kernels=[1, 3, 5, 7]):
+
+        super(FMGCBlock, self).__init__()
+
+        self.skip = ConvLayer(in_channels, out_channels, kernel_size=1, stride=1)
+        self.conv_init = nn.Sequential(
+            ConvLayer(in_channels, out_channels, kernel_size=1, stride=1),
+            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+        )
+        self.branches = nn.ModuleList([get_mutliscale_branch(in_channels, out_channels, kernel) for kernel in multiscale_kernels])
+        self.bottleneck = Bottleneck(out_channels, out_channels)
+
 
     def forward(self, x):
-
-        x0 = self.branch0(x)
+        x0 = self.skip(x)
         x = self.conv_init(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        x4 = self.branch4(x)
-
-        x = torch.add(x0, x1)
-        x = torch.add(x2, x)
-        x = torch.add(x3, x)
-        x = torch.add(x4, x)
-        x = self.conv(x)
-
+        for branch in self.branches:
+            x0 += branch(x)
+        x = self.bottleneck(x)
         return x
 
 
@@ -257,9 +308,6 @@ class CALayer(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
         # feature channel downscale and upscale --> channel weight
-        # print(channels)
-        # print(reduction)
-        # print(channels // reduction)
         self.conv_du = nn.Sequential(
             nn.Conv2d(channels, channels // reduction, 1, padding=0, bias=True),
             nn.ReLU(inplace=True),
@@ -404,11 +452,12 @@ class FMMRNet(nn.Module):
 
 
 class FMMRNetModular(nn.Module):
-    def __init__(self, input_size=256, channel_mul=16, depth=5, center_depth=4, attention_type="channel", reduction=16):
+    def __init__(self, input_size=256, channel_mul=16, depth=5, center_depth=4, attention_type="channel", reduction=16, multiscale_kernels=[1, 3, 5, 7]):
         super(FMMRNetModular, self).__init__()
 
         assert input_size >= np.power(2, depth), "Latent size will diminish to zero."
         assert channel_mul >= reduction, "For channel attention, the reduction <= channel_mul"
+
         self.channel_mul = channel_mul
         self.depth = depth
         self.init = nn.Sequential(
@@ -421,17 +470,15 @@ class FMMRNetModular(nn.Module):
         decoder_blocks = []
 
         for i in range(self.depth):
+            # Make encoder block
             dim1 = self.channel_mul * np.power(2, i)
             dim2 = self.channel_mul * np.power(2, i + 1) if i != self.depth - 1 else self.channel_mul * np.power(2, i)
-            encoder_blocks.append(nn.Sequential(FMGCBlock(dim1, dim1), ConvLayer(dim1, dim2, kernel_size=3, stride=2)))
+            encoder_blocks.append(nn.Sequential(FMGCBlock(dim1, dim1, multiscale_kernels), ConvLayer(dim1, dim2, kernel_size=3, stride=2)))
 
+            # Make corresponding decoder block
             dim3 = self.channel_mul * np.power(2, self.depth - i)
             dim4 = dim3 // 2
             dim3 = self.channel_mul * np.power(2, self.depth - i - 1) if i == 0 else dim3
-            # print("Block: ", i)
-            # print("dim3: ", dim3)
-            # print("dim4: ", dim4)
-            # print("multiplier: ", np.power(2, self.depth - i - 1))
             decoder_blocks.append(ConvTranspose2d(dim3, dim4, attention_type=attention_type, reduction=reduction))
 
         self.encoder = nn.ModuleList(encoder_blocks)
@@ -452,11 +499,14 @@ class FMMRNetModular(nn.Module):
 
     def forward(self, x):
         x1 = self.init(x)
+
         encoder_outputs = [x1]
         for i in range(self.depth):
             encoder_out = self.encoder[i](encoder_outputs[-1])
             encoder_outputs.append(encoder_out)
+
         out = self.center_block(encoder_outputs[-1])
+
         decoder_outputs = [out]
         residual_outputs = []
         for i in range(self.depth):
@@ -464,6 +514,7 @@ class FMMRNetModular(nn.Module):
             rgb_output = self.rgb_convs[i](decoder_output)
             decoder_outputs.append(decoder_output)
             residual_outputs.append(rgb_output)
+
         downsampled_inputs = self.downsample(x)
         clear_outputs = [downsampled_inputs[i] - residual_outputs[i] for i in range(self.depth)]
         return clear_outputs, residual_outputs
@@ -543,10 +594,10 @@ class DerainCNN(CNN):
         y = self.downsample(y)
         fake_y, _ = self(x)
 
-        if batch_idx % 50 == 0:
-            result = torch.cat((x[:1], fake_y[-1][:1], y[-1][:1]))
-            grid = torchvision.utils.make_grid(result)
-            self.logger.experiment.add_image("train_images", grid)
+        # if batch_idx % 50 == 0:
+        #     result = torch.cat((x[:1], fake_y[-1][:1], y[-1][:1]))
+        #     grid = torchvision.utils.make_grid(result)
+        #     self.logger.experiment.add_image("train_images", grid)
 
         loss_gen, loss_pixel, loss_per = self.loss_function(fake_y, y)
         psnr, loss_ssim = self.return_metrics(fake_y[-1], y[-1])

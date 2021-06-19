@@ -56,6 +56,7 @@ parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--data_dir", type=str, default="data")
 parser.add_argument("--dataset", type=str, default="JRDR")
 parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--multiscale_kernels", type=str, default='1x3x5x7')
 parser.add_argument("--channel_mul", type=int, default=16)
 parser.add_argument("--depth", type=int, default=5)
 parser.add_argument("--center_depth", type=int, default=4)
@@ -66,7 +67,8 @@ parser.add_argument("--gamma", type=float, default=0.8)
 args = parser.parse_args()
 
 device = "cuda" if (torch.cuda.is_available() and args.device == "cuda") else "cpu"
-
+args.multiscale_kernels = [int(kernel) for kernel in args.multiscale_kernels.split('x')]
+print("Kernels: ", args.multiscale_kernels)
 set_seed(args.seed)
 input_size = args.input_size
 train_transform = get_train_transforms(input_size)
@@ -82,6 +84,7 @@ base = FMMRNetModular(
     center_depth=args.center_depth,
     attention_type=args.attention_type,
     reduction=args.reduction,
+    multiscale_kernels=args.multiscale_kernels,
 )
 
 model = DerainCNNModular(
@@ -124,7 +127,7 @@ trainer = Trainer(
     weights_summary="top",
     benchmark=True,
     logger=tb_logger,
-    check_val_every_n_epoch=10,
+    check_val_every_n_epoch=50,
 )
 
 trainer.fit(model, datamodule=data)
