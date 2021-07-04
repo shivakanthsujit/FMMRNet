@@ -1,10 +1,8 @@
 import argparse
 import importlib
 import os
-import random
 import sys
 
-import numpy as np
 import pytorch_lightning as pl
 import ruamel.yaml as yaml
 import torch
@@ -12,13 +10,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from datasets import (
-    JRDR,
-    get_test_loader,
-    get_train_transforms,
-    get_train_valid_loader,
-    get_valid_transforms,
-)
+from datasets import get_train_transforms, get_valid_transforms
 from models import DerainCNNModular, FMMRNetModular
 from utils import set_seed, validate
 
@@ -64,6 +56,7 @@ parser.add_argument("--attention_type", type=str, default="channel")
 parser.add_argument("--reduction", type=int, default=16)
 parser.add_argument("--lr", type=float, default=4e-4)
 parser.add_argument("--gamma", type=float, default=0.8)
+parser.add_argument("--act", type=str, default='ReLU')
 args = parser.parse_args()
 
 device = "cuda" if (torch.cuda.is_available() and args.device == "cuda") else "cpu"
@@ -77,6 +70,9 @@ assert args.dataset in AVAILABLE_DATASETS, f"Dataset {args.dataset} not found."
 data_class = _import_class(f"datasets.{args.dataset}DataModule")
 data = data_class(args.data_dir, train_transform=train_transform, valid_transform=valid_transform)
 
+assert args.act in ['ELU', 'LeakyReLU', 'PReLU', 'ReLU', 'Tanh', 'Sigmoid', 'SELU']
+args.act = getattr(torch.nn, args.act)
+
 base = FMMRNetModular(
     input_size=args.input_size,
     channel_mul=args.channel_mul,
@@ -85,6 +81,7 @@ base = FMMRNetModular(
     attention_type=args.attention_type,
     reduction=args.reduction,
     multiscale_kernels=args.multiscale_kernels,
+    act=args.act(),
 )
 
 model = DerainCNNModular(

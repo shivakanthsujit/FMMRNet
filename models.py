@@ -91,10 +91,10 @@ class Conv(nn.Module):
         padding=(0, 0),
         dilation=1,
         groups=1,
-        relu=True,
         norm=False,
         bias=False,
         spec_norm=True,
+        act=nn.ReLU()
     ):
         super(Conv, self).__init__()
         self.out_channels = out_channels
@@ -122,14 +122,14 @@ class Conv(nn.Module):
                 )
             )
         self.norm = nn.BatchNorm2d(out_channels) if norm else None
-        self.relu = nn.ReLU() if relu else None
+        self.act = act
 
     def forward(self, x):
         x = self.conv(x)
         if self.norm:
             x = self.norm(x)
-        if self.relu:
-            x = self.relu(x)
+        if self.act:
+            x = self.act(x)
         return x
 
 
@@ -143,6 +143,7 @@ class ConvLayer(nn.Module):
         dilation=1,
         norm=False,
         spec_norm=True,
+        act=nn.ReLU()
     ):
         super(ConvLayer, self).__init__()
         reflection_padding = kernel_size // 2
@@ -151,23 +152,23 @@ class ConvLayer(nn.Module):
         if spec_norm:
             self.conv2d = spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size, stride, dilation=dilation))
         self.norm = nn.BatchNorm2d(out_channels) if norm else None
-        self.relu = nn.ReLU()
+        self.act = act
 
     def forward(self, x):
         out = self.reflection_pad(x)
         out = self.conv2d(out)
         if self.norm:
             out = self.norm(out)
-        out = self.relu(out)
+        out = self.act(out)
         return out
 
 
 class Bottleneck(nn.Module):
-    def __init__(self, in_channels, out_channels, reduce=4):
+    def __init__(self, in_channels, out_channels, reduce=4, act=nn.ReLU()):
         super(Bottleneck, self).__init__()
-        self.conv1 = ConvLayer(in_channels, out_channels // reduce, kernel_size=1, stride=1)
-        self.conv2 = ConvLayer(out_channels // reduce, out_channels // reduce, kernel_size=3, stride=1)
-        self.conv3 = ConvLayer(out_channels // reduce, out_channels, kernel_size=1, stride=1)
+        self.conv1 = ConvLayer(in_channels, out_channels // reduce, kernel_size=1, stride=1, act=act)
+        self.conv2 = ConvLayer(out_channels // reduce, out_channels // reduce, kernel_size=3, stride=1, act=act)
+        self.conv3 = ConvLayer(out_channels // reduce, out_channels, kernel_size=1, stride=1, act=act)
 
     def forward(self, x):
         out = self.conv1(x)
@@ -231,46 +232,46 @@ class Bottleneck(nn.Module):
 
 #         return x
 
-def get_mutliscale_branch(in_channels, out_channels, kernel):
+def get_mutliscale_branch(in_channels, out_channels, kernel, act=nn.ReLU()):
     assert kernel in [1, 3, 5, 7], f"Invalid kernel size {kernel}"
     if kernel == 1:
         return nn.Sequential(
-            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
-            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1, act=act),
+            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1, act=act),
         )
     elif kernel == 3:
         return nn.Sequential(
-            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
-            Conv(out_channels, out_channels, kernel_size=(3, 1), stride=1, padding=(1, 0)),
-            Conv(out_channels, out_channels, kernel_size=(1, 3), stride=1, padding=(0, 1)),
-            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1, act=act),
+            Conv(out_channels, out_channels, kernel_size=(3, 1), stride=1, padding=(1, 0), act=act),
+            Conv(out_channels, out_channels, kernel_size=(1, 3), stride=1, padding=(0, 1), act=act),
+            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1, act=act),
         )
     elif kernel == 5:
         return nn.Sequential(
-            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
-            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
-            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1, act=act),
+            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1, act=act),
+            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1, act=act),
         )
     elif kernel == 7:
         return nn.Sequential(
-            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1),
-            Conv(out_channels, out_channels, kernel_size=(7, 1), stride=1, padding=(3, 0)),
-            Conv(out_channels, out_channels, kernel_size=(1, 7), stride=1, padding=(0, 3)),
+            Conv(out_channels, out_channels, kernel_size=(1, 1), stride=1, act=act),
+            Conv(out_channels, out_channels, kernel_size=(7, 1), stride=1, padding=(3, 0), act=act),
+            Conv(out_channels, out_channels, kernel_size=(1, 7), stride=1, padding=(0, 3), act=act),
         )
 
 
 class FMGCBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, multiscale_kernels=[1, 3, 5, 7]):
+    def __init__(self, in_channels, out_channels, multiscale_kernels=[1, 3, 5, 7], act=nn.ReLU()):
 
         super(FMGCBlock, self).__init__()
 
-        self.skip = ConvLayer(in_channels, out_channels, kernel_size=1, stride=1)
+        self.skip = ConvLayer(in_channels, out_channels, kernel_size=1, stride=1, act=act)
         self.conv_init = nn.Sequential(
-            ConvLayer(in_channels, out_channels, kernel_size=1, stride=1),
-            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1),
+            ConvLayer(in_channels, out_channels, kernel_size=1, stride=1, act=act),
+            ConvLayer(out_channels, out_channels, kernel_size=3, stride=1, act=act),
         )
-        self.branches = nn.ModuleList([get_mutliscale_branch(in_channels, out_channels, kernel) for kernel in multiscale_kernels])
-        self.bottleneck = Bottleneck(out_channels, out_channels)
+        self.branches = nn.ModuleList([get_mutliscale_branch(in_channels, out_channels, kernel, act=act) for kernel in multiscale_kernels])
+        self.bottleneck = Bottleneck(out_channels, out_channels, act=act)
 
 
     def forward(self, x):
@@ -283,13 +284,13 @@ class FMGCBlock(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+    def __init__(self, in_channels, out_channels, stride=1, act=nn.ReLU()):
 
         super(ResidualBlock, self).__init__()
         self.pading = nn.ReflectionPad2d(1)
-        self.conv_init = ConvLayer(in_channels, in_channels, kernel_size=1, stride=stride)
-        self.conv1 = ConvLayer(in_channels, out_channels, kernel_size=3, stride=stride)
-        self.conv2 = ConvLayer(out_channels, out_channels, kernel_size=3, stride=stride)
+        self.conv_init = ConvLayer(in_channels, in_channels, kernel_size=1, stride=stride, act=act)
+        self.conv1 = ConvLayer(in_channels, out_channels, kernel_size=3, stride=stride, act=act)
+        self.conv2 = ConvLayer(out_channels, out_channels, kernel_size=3, stride=stride, act=act)
 
     def forward(self, x):
 
@@ -340,9 +341,9 @@ class PixelAttention(nn.Module):
 
 
 class Upsample(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, act=nn.ReLU()):
         super(Upsample, self).__init__()
-        self.conv = ConvLayer(in_channels, out_channels)
+        self.conv = ConvLayer(in_channels, out_channels, act=act)
 
     def forward(self, x):
         x = F.interpolate(x, scale_factor=2)
@@ -351,15 +352,15 @@ class Upsample(nn.Module):
 
 
 class ConvTranspose2d(nn.Module):
-    def __init__(self, in_channels, out_channels, dropout=0.0, attention_type="channel", reduction=16):
+    def __init__(self, in_channels, out_channels, dropout=0.0, attention_type="channel", reduction=16, act=nn.ReLU()):
         super(ConvTranspose2d, self).__init__()
 
-        layers = [ResidualBlock(out_channels, out_channels)]
+        layers = [ResidualBlock(out_channels, out_channels, act=act)]
         if dropout:
             layers.append(nn.Dropout2d(dropout))
 
         self.model = nn.Sequential(*layers)
-        self.up = Upsample(in_channels, out_channels)
+        self.up = Upsample(in_channels, out_channels, act=act)
         if attention_type == "channel":
             self.attn = CALayer(out_channels, reduction=reduction)
         elif attention_type == "pixel":
@@ -378,7 +379,7 @@ class ConvTranspose2d(nn.Module):
 class RGBConv(nn.Module):
     def __init__(self, in_channels):
         super(RGBConv, self).__init__()
-        self.clear = nn.Sequential(Conv(in_channels, 3, 1, relu=False, norm=False))
+        self.clear = nn.Sequential(Conv(in_channels, 3, 1, act=None, norm=False))
 
     def forward(self, x):
         clear = self.clear(x)
@@ -452,7 +453,7 @@ class FMMRNet(nn.Module):
 
 
 class FMMRNetModular(nn.Module):
-    def __init__(self, input_size=256, channel_mul=16, depth=5, center_depth=4, attention_type="channel", reduction=16, multiscale_kernels=[1, 3, 5, 7]):
+    def __init__(self, input_size=256, channel_mul=16, depth=5, center_depth=4, attention_type="channel", reduction=16, multiscale_kernels=[1, 3, 5, 7], act=nn.ReLU()):
         super(FMMRNetModular, self).__init__()
 
         assert input_size >= np.power(2, depth), "Latent size will diminish to zero."
@@ -461,9 +462,9 @@ class FMMRNetModular(nn.Module):
         self.channel_mul = channel_mul
         self.depth = depth
         self.init = nn.Sequential(
-            Conv(3, self.channel_mul // 2, 1),
-            ConvLayer(self.channel_mul // 2, self.channel_mul, kernel_size=3, stride=1),
-            ConvLayer(self.channel_mul, self.channel_mul, kernel_size=3, stride=1),
+            Conv(3, self.channel_mul // 2, 1, act=act),
+            ConvLayer(self.channel_mul // 2, self.channel_mul, kernel_size=3, stride=1, act=act),
+            ConvLayer(self.channel_mul, self.channel_mul, kernel_size=3, stride=1, act=act),
         )
 
         encoder_blocks = []
@@ -473,18 +474,18 @@ class FMMRNetModular(nn.Module):
             # Make encoder block
             dim1 = self.channel_mul * np.power(2, i)
             dim2 = self.channel_mul * np.power(2, i + 1) if i != self.depth - 1 else self.channel_mul * np.power(2, i)
-            encoder_blocks.append(nn.Sequential(FMGCBlock(dim1, dim1, multiscale_kernels), ConvLayer(dim1, dim2, kernel_size=3, stride=2)))
+            encoder_blocks.append(nn.Sequential(FMGCBlock(dim1, dim1, multiscale_kernels, act=act), ConvLayer(dim1, dim2, kernel_size=3, stride=2, act=act)))
 
             # Make corresponding decoder block
             dim3 = self.channel_mul * np.power(2, self.depth - i)
             dim4 = dim3 // 2
             dim3 = self.channel_mul * np.power(2, self.depth - i - 1) if i == 0 else dim3
-            decoder_blocks.append(ConvTranspose2d(dim3, dim4, attention_type=attention_type, reduction=reduction))
+            decoder_blocks.append(ConvTranspose2d(dim3, dim4, attention_type=attention_type, reduction=reduction, act=act))
 
         self.encoder = nn.ModuleList(encoder_blocks)
         self.center_block = nn.Sequential(
             *[
-                ResidualBlock(self.channel_mul * np.power(2, self.depth - 1), self.channel_mul * np.power(2, self.depth - 1))
+                ResidualBlock(self.channel_mul * np.power(2, self.depth - 1), self.channel_mul * np.power(2, self.depth - 1), act=act)
                 for _ in range(center_depth)
             ]
         )
@@ -688,10 +689,10 @@ class DerainCNNModular(CNN):
         y = self.downsample(y)
         fake_y, _ = self(x)
 
-        if batch_idx % 50 == 0:
-            result = torch.cat((x[:1], fake_y[-1][:1], y[-1][:1]))
-            grid = torchvision.utils.make_grid(result)
-            self.logger.experiment.add_image("train_images", grid)
+        # if batch_idx == 0:
+        #     result = torch.cat((x[:1], fake_y[-1][:1], y[-1][:1]))
+        #     grid = torchvision.utils.make_grid(result)
+        #     self.logger.experiment.add_image("train_images", grid)
 
         loss_gen, loss_pixel, loss_per = self.loss_function(fake_y, y)
         psnr, ssim = self.return_metrics(fake_y[-1], y[-1])
